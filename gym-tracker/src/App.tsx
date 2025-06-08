@@ -6,13 +6,46 @@ interface CheckIn {
   timestamp: number;
 }
 
+interface Friend {
+  id: string;
+  name: string;
+  friendCode: string;
+  checkIns: CheckIn[];
+  addedAt: number;
+}
+
+interface UserProfile {
+  name: string;
+  friendCode: string;
+  checkIns: CheckIn[];
+}
+
 function App() {
   const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
   const [hasCheckedInToday, setHasCheckedInToday] = useState(false);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'calendar'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'calendar' | 'friends'>('dashboard');
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [showAddFriend, setShowAddFriend] = useState(false);
+  const [friendName, setFriendName] = useState('');
+  const [friendCode, setFriendCode] = useState('');
+
+
+  // Generate unique friend code
+  const generateFriendCode = () => {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  };
 
   useEffect(() => {
+    // Load user profile
+    const savedProfile = localStorage.getItem('gym-user-profile');
+    if (savedProfile) {
+      const profile = JSON.parse(savedProfile);
+      setUserProfile(profile);
+    }
+
+    // Load check-ins
     const saved = localStorage.getItem('gym-checkins');
     if (saved) {
       const parsedCheckIns = JSON.parse(saved);
@@ -24,7 +57,23 @@ function App() {
       );
       setHasCheckedInToday(checkedInToday);
     }
+
+    // Load friends
+    const savedFriends = localStorage.getItem('gym-friends');
+    if (savedFriends) {
+      setFriends(JSON.parse(savedFriends));
+    }
   }, []);
+
+  const createUserProfile = (name: string) => {
+    const profile: UserProfile = {
+      name: name.trim(),
+      friendCode: generateFriendCode(),
+      checkIns: checkIns
+    };
+    setUserProfile(profile);
+    localStorage.setItem('gym-user-profile', JSON.stringify(profile));
+  };
 
   const handleCheckIn = () => {
     const today = new Date();
@@ -44,6 +93,13 @@ function App() {
     setHasCheckedInToday(true);
     
     localStorage.setItem('gym-checkins', JSON.stringify(updatedCheckIns));
+    
+    // Update user profile with new check-in
+    if (userProfile) {
+      const updatedProfile = { ...userProfile, checkIns: updatedCheckIns };
+      setUserProfile(updatedProfile);
+      localStorage.setItem('gym-user-profile', JSON.stringify(updatedProfile));
+    }
   };
 
   const handleUncheck = () => {
@@ -55,12 +111,63 @@ function App() {
     setCheckIns(updatedCheckIns);
     setHasCheckedInToday(false);
     localStorage.setItem('gym-checkins', JSON.stringify(updatedCheckIns));
+    
+    // Update user profile
+    if (userProfile) {
+      const updatedProfile = { ...userProfile, checkIns: updatedCheckIns };
+      setUserProfile(updatedProfile);
+      localStorage.setItem('gym-user-profile', JSON.stringify(updatedProfile));
+    }
   };
 
-  const calculateStreak = () => {
-    if (checkIns.length === 0) return 0;
+  const addFriend = () => {
+    if (!friendName.trim() || !friendCode.trim()) return;
     
-    const sortedCheckIns = [...checkIns].sort((a, b) => b.timestamp - a.timestamp);
+    const newFriend: Friend = {
+      id: Date.now().toString(),
+      name: friendName.trim(),
+      friendCode: friendCode.trim().toUpperCase(),
+      checkIns: [], // Will be populated when they share their data
+      addedAt: Date.now()
+    };
+    
+    const updatedFriends = [...friends, newFriend];
+    setFriends(updatedFriends);
+    localStorage.setItem('gym-friends', JSON.stringify(updatedFriends));
+    
+    setFriendName('');
+    setFriendCode('');
+    setShowAddFriend(false);
+  };
+
+  const removeFriend = (friendId: string) => {
+    const updatedFriends = friends.filter(f => f.id !== friendId);
+    setFriends(updatedFriends);
+    localStorage.setItem('gym-friends', JSON.stringify(updatedFriends));
+  };
+
+  const shareMyData = () => {
+    if (!userProfile) return;
+    
+    const shareData = {
+      name: userProfile.name,
+      friendCode: userProfile.friendCode,
+      checkIns: checkIns,
+      sharedAt: Date.now()
+    };
+    
+    const encodedData = btoa(JSON.stringify(shareData));
+    const shareUrl = `${window.location.origin}?friend=${encodedData}`;
+    
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      alert('Share link copied to clipboard! Send this to your friends.');
+    });
+  };
+
+  const calculateStreak = (workouts: CheckIn[]) => {
+    if (workouts.length === 0) return 0;
+    
+    const sortedCheckIns = [...workouts].sort((a, b) => b.timestamp - a.timestamp);
     const today = new Date();
     let streak = 0;
     
@@ -93,9 +200,9 @@ function App() {
     return streak;
   };
 
-  const getLastVisit = () => {
-    if (checkIns.length === 0) return 'Never';
-    const sortedCheckIns = [...checkIns].sort((a, b) => b.timestamp - a.timestamp);
+  const getLastVisit = (workouts: CheckIn[] = checkIns) => {
+    if (workouts.length === 0) return 'Never';
+    const sortedCheckIns = [...workouts].sort((a, b) => b.timestamp - a.timestamp);
     const lastCheckIn = sortedCheckIns[0];
     if (!lastCheckIn) return 'Never';
     return new Date(lastCheckIn.timestamp).toLocaleDateString();
@@ -157,6 +264,83 @@ function App() {
            checkInDate.getFullYear() === new Date().getFullYear();
   }).length;
 
+  // Check for shared friend data in URL
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const friendData = urlParams.get('friend');
+    
+    if (friendData) {
+      try {
+        const decodedData = JSON.parse(atob(friendData));
+        const existingFriend = friends.find(f => f.friendCode === decodedData.friendCode);
+        
+        if (existingFriend) {
+          // Update existing friend's data
+          const updatedFriends = friends.map(f => 
+            f.friendCode === decodedData.friendCode 
+              ? { ...f, checkIns: decodedData.checkIns }
+              : f
+          );
+          setFriends(updatedFriends);
+          localStorage.setItem('gym-friends', JSON.stringify(updatedFriends));
+        } else {
+          // Add new friend with data
+          const newFriend: Friend = {
+            id: Date.now().toString(),
+            name: decodedData.name,
+            friendCode: decodedData.friendCode,
+            checkIns: decodedData.checkIns,
+            addedAt: Date.now()
+          };
+          const updatedFriends = [...friends, newFriend];
+          setFriends(updatedFriends);
+          localStorage.setItem('gym-friends', JSON.stringify(updatedFriends));
+        }
+        
+        // Clean URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } catch (error) {
+        console.log('Invalid friend data in URL');
+      }
+    }
+  }, [friends]);
+
+  // Show profile setup if no user profile
+  if (!userProfile) {
+    return (
+      <div className="app">
+        <div className="container">
+          <div className="profile-setup">
+            <div className="profile-setup-content">
+              <div className="profile-icon">👋</div>
+              <h2>Welcome to Gym Tracker!</h2>
+              <p>Let's set up your profile to start tracking workouts with friends</p>
+              
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target as HTMLFormElement);
+                const name = formData.get('name') as string;
+                if (name.trim()) createUserProfile(name);
+              }}>
+                <input
+                  type="text"
+                  name="name"
+                  placeholder="Enter your name"
+                  className="profile-input"
+                  maxLength={20}
+                  required
+                />
+                <button type="submit" className="profile-submit">
+                  Get Started 🚀
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <div className="container">
@@ -177,19 +361,35 @@ function App() {
             >
               Calendar
             </button>
+            <button 
+              className={`nav-tab ${currentView === 'friends' ? 'active' : ''}`}
+              onClick={() => setCurrentView('friends')}
+            >
+              Friends
+            </button>
           </nav>
         </header>
 
         <div className="content">
           {currentView === 'dashboard' ? (
             <>
+              <div className="user-greeting">
+                <h2>Hey {userProfile.name}! 👋</h2>
+                <div className="friend-code-display">
+                  <span>Your friend code: <strong>{userProfile.friendCode}</strong></span>
+                  <button className="share-btn" onClick={shareMyData}>
+                    📤 Share Progress
+                  </button>
+                </div>
+              </div>
+
               <div className="stats-grid">
                 <div className="stat-card primary">
                   <div className="stat-number">{checkIns.length}</div>
                   <div className="stat-label">Total Workouts</div>
                 </div>
                 <div className="stat-card primary">
-                  <div className="stat-number">{calculateStreak()}</div>
+                  <div className="stat-number">{calculateStreak(checkIns)}</div>
                   <div className="stat-label">Current Streak</div>
                 </div>
                 <div className="stat-card secondary">
@@ -248,7 +448,7 @@ function App() {
                 )}
               </div>
             </>
-          ) : (
+          ) : currentView === 'calendar' ? (
             <div className="calendar-view">
               <div className="calendar-header">
                 <button className="calendar-nav" onClick={() => navigateMonth('prev')}>
@@ -293,6 +493,121 @@ function App() {
                   <div className="legend-color rest"></div>
                   <span>Rest Day</span>
                 </div>
+              </div>
+            </div>
+          ) : (
+            <div className="friends-view">
+              <div className="friends-header">
+                <h3>Workout Buddies</h3>
+                <button 
+                  className="add-friend-btn"
+                  onClick={() => setShowAddFriend(true)}
+                >
+                  ➕ Add Friend
+                </button>
+              </div>
+
+              {showAddFriend && (
+                <div className="add-friend-modal">
+                  <div className="modal-content">
+                    <div className="modal-header">
+                      <h4>Add Workout Buddy</h4>
+                      <button 
+                        className="close-btn"
+                        onClick={() => setShowAddFriend(false)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <form onSubmit={(e) => {
+                      e.preventDefault();
+                      addFriend();
+                    }}>
+                      <input
+                        type="text"
+                        placeholder="Friend's name"
+                        value={friendName}
+                        onChange={(e) => setFriendName(e.target.value)}
+                        className="friend-input"
+                        maxLength={20}
+                        required
+                      />
+                      <input
+                        type="text"
+                        placeholder="Friend's code (e.g., ABC123)"
+                        value={friendCode}
+                        onChange={(e) => setFriendCode(e.target.value.toUpperCase())}
+                        className="friend-input"
+                        maxLength={6}
+                        required
+                      />
+                      <div className="modal-actions">
+                        <button type="button" onClick={() => setShowAddFriend(false)} className="cancel-btn">
+                          Cancel
+                        </button>
+                        <button type="submit" className="add-btn">
+                          Add Friend
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {friends.length > 0 ? (
+                <div className="friends-list">
+                  {friends.map((friend) => (
+                    <div key={friend.id} className="friend-card">
+                      <div className="friend-info">
+                        <div className="friend-avatar">👤</div>
+                        <div className="friend-details">
+                          <div className="friend-name">{friend.name}</div>
+                          <div className="friend-code">Code: {friend.friendCode}</div>
+                        </div>
+                      </div>
+                      
+                      <div className="friend-stats">
+                        <div className="friend-stat">
+                          <div className="stat-number">{friend.checkIns.length}</div>
+                          <div className="stat-label">Workouts</div>
+                        </div>
+                        <div className="friend-stat">
+                          <div className="stat-number">{calculateStreak(friend.checkIns)}</div>
+                          <div className="stat-label">Streak</div>
+                        </div>
+                        <div className="friend-stat">
+                          <div className="stat-number">{getLastVisit(friend.checkIns)}</div>
+                          <div className="stat-label">Last Visit</div>
+                        </div>
+                      </div>
+                      
+                      <button 
+                        className="remove-friend-btn"
+                        onClick={() => removeFriend(friend.id)}
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="no-friends">
+                  <div className="no-friends-icon">👥</div>
+                  <div className="no-friends-title">No workout buddies yet</div>
+                  <div className="no-friends-subtitle">
+                    Add friends to track each other's progress and stay motivated!
+                  </div>
+                </div>
+              )}
+
+              <div className="friends-help">
+                <h4>How to add friends:</h4>
+                <ol>
+                  <li>Ask your friend for their <strong>friend code</strong></li>
+                  <li>Click "Add Friend" and enter their name and code</li>
+                  <li>Share your progress using the "Share Progress" button</li>
+                  <li>When they click your link, their data will sync automatically!</li>
+                </ol>
               </div>
             </div>
           )}
